@@ -4,8 +4,8 @@ import {
   batteryVoltage, batteryMode, solarSplit, loadPerTrunk, computeState,
   computeIrradiance, mpptPowerKW, mpptVmp, totalSolarKW,
   computeStateSim, stepBatteries,
-} from '../model.js';
-import { DEFAULT_CONFIG } from '../config.js';
+} from '../app/model.js';
+import { DEFAULT_CONFIG } from '../app/config.js';
 
 /* ============================ batteryVoltage (plateau with droop) ============================ */
 
@@ -315,7 +315,7 @@ describe('constants & parts', () => {
     expect(CONST.banks[3].enabled).toBe(false);
   });
   test('PARTS has all component types', () => {
-    ['mppt','bank','dcdc','acdc','dcac3','dcac1','dcbus','trunk','acpanel'].forEach(k => {
+    ['mppt','bank','dcdc','acdc','dcac3','dcac1','dcbus','acpanel'].forEach(k => {
       expect(PARTS[k]).toBeDefined();
       expect(PARTS[k].title).toBeTruthy();
       expect(PARTS[k].desc).toBeTruthy();

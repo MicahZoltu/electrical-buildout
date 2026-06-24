@@ -85,10 +85,6 @@ export const PARTS = {
     title: 'Common DC Bus (~400V)',
     desc: 'Regulated DC rail — no phases, no frequency. Coordination is via voltage setpoints: each source converter has a band, priority falls out of where the bus voltage sits. DC-rated busbars/breakers/fuses/contactors only (DC arcs do not self-extinguish). Contained in the equipment room.',
   },
-  trunk: {
-    title: 'Existing 12-Wire Trunk (25mm² each)',
-    desc: 'Already run around the property — no new wire. Repurposed to carry mixed AC: delta 3φ (3+PE=4), wye 3φ (3+N+PE=5), 1φ (L+N=2, PE shared) = 11 wires, 1 spare. All downstream wiring is standard AC; no DC-rated gear needed on the trunk.',
-  },
   acpanel: {
     title: 'AC Distribution Panel',
     desc: 'Standard AC breakers and protection downstream of the DC-AC converters. One per trunk (3 total). No DC-rated equipment needed here — the DC bus stays in the equipment room.',
@@ -299,7 +295,7 @@ export function computeStateSim({ solarTotalKW, loads, banks, config } = {}) {
     } else if (mode === 'discharge' && dischargeKW > 0) {
       kw = Math.min(b.maxDischargeKW, dischargeKW * (b.maxDischargeKW / canDischargeTotal));
     }
-    return { id: b.id, mode, vBat: b.vBat, kw: round(kw, 2), soc: b.soc };
+    return { id: b.id, mode, vBat: b.vBat, kw: round(kw, 2), soc: b.soc, cfg: b.cfg };
   });
 
   chargeKW   = round(perBank.filter(p => p.mode === 'charge').reduce((s, p) => s + p.kw, 0), 2);

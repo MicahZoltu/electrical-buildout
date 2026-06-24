@@ -2,7 +2,7 @@ import { serve } from 'bun';
 import { dirname, join } from 'node:path';
 
 const root = dirname(new URL(import.meta.url).pathname);
-const appDir = join(root, '');
+const appDir = join(root, 'app');
 
 const server = serve({
   port: 0,

@@ -44,6 +44,7 @@
   @keyframes flow{to{stroke-dashoffset:-14}}
   @keyframes flow-rev{to{stroke-dashoffset:14}}
   .node-off{opacity:.28}
+  .node-disabled{opacity:.1}
   .tooltip{position:absolute;background:#21262d;border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:11px;pointer-events:none;display:none;z-index:5;max-width:260px;line-height:1.4}
   .legend{margin-top:14px;display:grid;gap:6px;font-size:11px}
   .legend .row{display:flex;align-items:center;gap:8px;color:var(--muted)}
@@ -66,11 +67,6 @@
 </head>
 <body>
 <div id="app">
-  <header>
-    <h1>Solar + Battery Buildout — Modular DC Bus Coupling</h1>
-    <div class="sub">4 MPPTs · 4 battery banks (bi-dir DC-DC) · grid AC-DC charger · 3 grid-forming DC-AC converters · common ~400V DC bus · existing 12-wire trunk</div>
-  </header>
-
   <div class="controls">
     <div class="ctrl clock">
       <label>Time of day · <span id="clockVal">00:00</span></label>
@@ -78,8 +74,8 @@
       <span class="val" id="phaseVal">night</span>
     </div>
     <div class="ctrl">
-      <label>Overcast</label>
-      <button class="btn toggle" id="overcastBtn">Clear</button>
+      <label>Sky</label>
+      <button class="btn toggle" id="overcastBtn">☀️ Clear</button>
     </div>
     <div class="ctrl">
       <label>Config</label>
@@ -120,14 +116,9 @@
         <div class="row"><span class="swatch" style="background:var(--solar)"></span>Battery charge (solar surplus)</div>
         <div class="row"><span class="swatch" style="background:var(--grid)"></span>Grid → AC-DC → bus</div>
         <div class="row"><span class="swatch" style="background:var(--dc)"></span>Bus → DC-AC converters</div>
-        <div class="row"><span class="swatch" style="background:var(--ac3)"></span>3-phase AC trunk</div>
-        <div class="row"><span class="swatch" style="background:var(--ac1)"></span>1-phase AC trunk</div>
+        <div class="row"><span class="swatch" style="background:var(--ac3)"></span>3-phase AC line</div>
+        <div class="row"><span class="swatch" style="background:var(--ac1)"></span>1-phase AC line</div>
         <div class="row"><span class="swatch" style="background:var(--off)"></span>Idle / offline / disabled</div>
-      </div>
-      <div style="margin-top:14px;font-size:11px;color:var(--muted);line-height:1.5;border-top:1px solid var(--border);padding-top:10px">
-        <b>Key idea:</b> DC has no phases. Bus voltage is the coordination signal.
-        The clock auto-advances (~48s = 1 day); drag the time slider to scrub.
-        Toggle overcast, adjust loads, edit config — all live.
       </div>
     </aside>
   </div>
@@ -158,6 +149,16 @@
       <tbody></tbody>
     </table>
     <div class="cfg-err" id="cfgErr"></div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin:14px 0 6px">
+      <h3 style="margin:0">Import / Export JSON</h3>
+      <span id="cfgIoStatus" style="font-size:11px;min-height:0;line-height:1.4"></span>
+    </div>
+    <textarea id="cfgJson" rows="6" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px;font-family:ui-monospace,monospace;font-size:11px;resize:vertical" placeholder="Paste exported config JSON here to import…"></textarea>
+    <div style="display:flex;gap:8px;margin-top:6px">
+      <button class="btn" id="cfgExport">Export (copy to clipboard)</button>
+      <button class="btn" id="cfgImport">Import from box above</button>
+    </div>
     <div class="actions">
       <button class="btn" id="cfgReset">Reset to defaults</button>
       <button class="btn" id="cfgCancel">Cancel</button>

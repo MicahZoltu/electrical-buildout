@@ -219,7 +219,7 @@ function updateLabels(state, loads) {
 
 function updateOvercastBtn() {
   S.overcast.classList.toggle('on', overcast);
-  S.overcast.textContent = overcast ? 'Overcast' : 'Clear';
+  S.overcast.textContent = overcast ? '🌧️ Overcast' : '☀️ Clear';
 }
 
 function regColor(r){
@@ -278,6 +278,9 @@ let editing = null;
 function openConfigModal() {
   editing = cloneConfig(config);
   cfgErr.textContent = '';
+  cfgErr.style.color = '';
+  cfgJson.value = '';
+  ioStatus('');
   renderConfigTables();
   modal.classList.add('open');
 }
@@ -380,6 +383,46 @@ document.getElementById('cfgReset').addEventListener('click', () => {
   renderConfigTables();
   cfgErr.textContent = '';
 });
+
+// Import / Export JSON — status shown inline next to the heading (cfgIoStatus),
+// never in cfgErr (which is reserved for save-validation errors and lives below).
+const cfgJson = document.getElementById('cfgJson');
+const cfgIoStatus = document.getElementById('cfgIoStatus');
+function ioStatus(msg, color, ttl) {
+  cfgIoStatus.textContent = msg || '';
+  cfgIoStatus.style.color = color || '';
+  if (ioStatus._t) clearTimeout(ioStatus._t);
+  if (ttl) ioStatus._t = setTimeout(() => { cfgIoStatus.textContent = ''; cfgIoStatus.style.color = ''; }, ttl);
+}
+document.getElementById('cfgExport').addEventListener('click', async () => {
+  const json = JSON.stringify(editing, null, 2);
+  cfgJson.value = json;
+  try {
+    await navigator.clipboard.writeText(json);
+    ioStatus('✓ Copied to clipboard', 'var(--dc)', 1800);
+  } catch {
+    ioStatus('Clipboard blocked — JSON is in the box', 'var(--solar)', 3000);
+  }
+});
+document.getElementById('cfgImport').addEventListener('click', () => {
+  const raw = cfgJson.value.trim();
+  if (!raw) { ioStatus('Paste config JSON into the box first', 'var(--warn)', 2500); return; }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    ioStatus('Invalid JSON: ' + e.message, 'var(--warn)');
+    return;
+  }
+  if (!parsed || !Array.isArray(parsed.mppts) || !Array.isArray(parsed.banks)) {
+    ioStatus('JSON must have "mppts" and "banks" arrays', 'var(--warn)');
+    return;
+  }
+  editing = cloneConfig(parsed);
+  renderConfigTables();
+  ioStatus('✓ Imported — review and Save to apply', 'var(--dc)', 2500);
+});
+
 modal.addEventListener('click', e => {
   if (e.target === modal) closeConfigModal();
 });
