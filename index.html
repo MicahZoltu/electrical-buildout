@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Solar + Battery DC Bus Buildout</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#30363d;
+    --text:#e6edf3; --muted:#8b949e;
+    --solar:#ffb000; --battery:#4dd2ff; --grid:#b48cff; --gen:#ff7b72;
+    --dc:#39d353; --ac3:#79c0ff; --ac1:#f0883e; --load:#d2a8ff;
+    --off:#2a2f3a; --warn:#f85149;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  #app{display:flex;flex-direction:column;height:100vh}
+  header{padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--border)}
+  header h1{font-size:15px;margin:0;font-weight:600}
+  header .sub{font-size:11px;color:var(--muted);margin-top:2px}
+  .controls{display:flex;flex-wrap:wrap;gap:14px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--border);align-items:flex-end}
+  .ctrl{display:flex;flex-direction:column;gap:4px;min-width:140px}
+  .ctrl label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .ctrl .val{font-size:11px;font-weight:600}
+  .ctrl input[type=range]{width:100%;accent-color:#58a6ff}
+  .ctrl.battery{min-width:110px}
+  .main{flex:1;display:grid;grid-template-columns:1fr 280px;min-height:0}
+  .stage{position:relative;overflow:auto;background:radial-gradient(circle at 50% 30%,#11161f,#0a0d12);padding:16px}
+  svg{display:block;width:100%;height:100%;min-width:1180px}
+  .side{background:var(--panel);border-left:1px solid var(--border);padding:14px;overflow:auto}
+  .side h2{font-size:12px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .summary{font-size:12px;line-height:1.7}
+  .box-label{font-size:10px;fill:var(--muted)}
+  .box-title{font-size:11px;fill:var(--text);font-weight:600}
+  .flow{fill:none;stroke-width:3;stroke-linecap:round}
+  .flow.dash{stroke-dasharray:8 6;animation:flow 0.8s linear infinite}
+  .flow.dash.rev{animation:flow-rev 0.8s linear infinite}
+  @keyframes flow{to{stroke-dashoffset:-14}}
+  @keyframes flow-rev{to{stroke-dashoffset:14}}
+  .node-off{opacity:.28}
+  .tooltip{position:absolute;background:#21262d;border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:11px;pointer-events:none;display:none;z-index:5;max-width:260px;line-height:1.4}
+  .legend{margin-top:14px;display:grid;gap:6px;font-size:11px}
+  .legend .row{display:flex;align-items:center;gap:8px;color:var(--muted)}
+  .swatch{width:22px;height:10px;border-radius:2px}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Solar + Battery Buildout — Modular DC Bus Coupling</h1>
+    <div class="sub">4 MPPTs · 3 battery banks (bi-dir DC-DC) · grid AC-DC charger · 3 grid-forming DC-AC converters · common ~400V DC bus · existing 12-wire trunk</div>
+  </header>
+
+  <div class="controls">
+    <div class="ctrl">
+      <label>Solar power</label>
+      <input type="range" id="solarSlider" min="0" max="32" step="0.5" value="0" />
+      <span class="val" id="solarVal">0 kW</span>
+    </div>
+    <div class="ctrl">
+      <label>3φ Delta load (230V Δ@60A)</label>
+      <input type="range" id="deltaSlider" min="0" step="0.5" value="0" />
+      <span class="val" id="deltaVal">0 kW</span>
+    </div>
+    <div class="ctrl">
+      <label>3φ Wye load (400V Y@60A)</label>
+      <input type="range" id="wyeSlider" min="0" step="0.5" value="0" />
+      <span class="val" id="wyeVal">0 kW</span>
+    </div>
+    <div class="ctrl">
+      <label>1φ load (230V@120A)</label>
+      <input type="range" id="oneSlider" min="0" step="0.5" value="0" />
+      <span class="val" id="oneVal">0 kW</span>
+    </div>
+    <div class="ctrl battery">
+      <label>Bank A SoC (350V/15kWh)</label>
+      <input type="range" id="socA" min="0" max="100" step="1" value="50" />
+      <span class="val" id="socAVal">50%</span>
+    </div>
+    <div class="ctrl battery">
+      <label>Bank B SoC (400V/20kWh)</label>
+      <input type="range" id="socB" min="0" max="100" step="1" value="50" />
+      <span class="val" id="socBVal">50%</span>
+    </div>
+    <div class="ctrl battery">
+      <label>Bank C SoC (480V/10kWh)</label>
+      <input type="range" id="socC" min="0" max="100" step="1" value="50" />
+      <span class="val" id="socCVal">50%</span>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="stage" id="stage">
+      <svg id="diagram" viewBox="0 0 1320 880" xmlns="http://www.w3.org/2000/svg">
+        <g id="g-flows"></g>
+        <g id="g-nodes"></g>
+        <g id="g-labels"></g>
+      </svg>
+      <div class="tooltip" id="tooltip"></div>
+    </div>
+    <aside class="side">
+      <h2>System state</h2>
+      <div class="summary" id="summary"></div>
+      <div class="legend">
+        <div class="row"><span class="swatch" style="background:var(--solar)"></span>Solar → MPPT → bus</div>
+        <div class="row"><span class="swatch" style="background:var(--battery)"></span>Battery discharge</div>
+        <div class="row"><span class="swatch" style="background:var(--solar)"></span>Battery charge (solar surplus)</div>
+        <div class="row"><span class="swatch" style="background:var(--grid)"></span>Grid → AC-DC → bus</div>
+        <div class="row"><span class="swatch" style="background:var(--dc)"></span>Bus → DC-AC converters</div>
+        <div class="row"><span class="swatch" style="background:var(--ac3)"></span>3-phase AC trunk</div>
+        <div class="row"><span class="swatch" style="background:var(--ac1)"></span>1-phase AC trunk</div>
+        <div class="row"><span class="swatch" style="background:var(--off)"></span>Idle / offline</div>
+      </div>
+      <div style="margin-top:14px;font-size:11px;color:var(--muted);line-height:1.5;border-top:1px solid var(--border);padding-top:10px">
+        <b>Key idea:</b> DC has no phases. Bus voltage is the coordination signal —
+        drag the sliders and watch the bus voltage move between bands, engaging
+        batteries (charge/discharge) and the grid in priority order.
+        Hover any box for its spec.
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script type="module" src="./main.js"></script>
+</body>
+</html>
