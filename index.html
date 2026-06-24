@@ -23,13 +23,19 @@
   .ctrl label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
   .ctrl .val{font-size:11px;font-weight:600}
   .ctrl input[type=range]{width:100%;accent-color:#58a6ff}
-  .ctrl.battery{min-width:110px}
-  .main{flex:1;display:grid;grid-template-columns:1fr 280px;min-height:0}
+  .ctrl.clock{min-width:230px}
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:7px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600}
+  .btn:hover{background:#222736}
+  .btn.toggle.on{background:#1f3a5f;border-color:#58a6ff;color:#79c0ff}
+  .main{flex:1;display:grid;grid-template-columns:1fr 300px;min-height:0}
   .stage{position:relative;overflow:auto;background:radial-gradient(circle at 50% 30%,#11161f,#0a0d12);padding:16px}
   svg{display:block;width:100%;height:100%;min-width:1180px}
   .side{background:var(--panel);border-left:1px solid var(--border);padding:14px;overflow:auto}
   .side h2{font-size:12px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
   .summary{font-size:12px;line-height:1.7}
+  .summary .sec{margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #221}
+  .summary .row{display:flex;justify-content:space-between;gap:8px}
+  .summary .lbl{color:var(--muted)}
   .box-label{font-size:10px;fill:var(--muted)}
   .box-title{font-size:11px;fill:var(--text);font-weight:600}
   .flow{fill:none;stroke-width:3;stroke-linecap:round}
@@ -42,20 +48,42 @@
   .legend{margin-top:14px;display:grid;gap:6px;font-size:11px}
   .legend .row{display:flex;align-items:center;gap:8px;color:var(--muted)}
   .swatch{width:22px;height:10px;border-radius:2px}
+
+  /* Config modal */
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;align-items:center;justify-content:center}
+  .modal-overlay.open{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--border);border-radius:10px;width:760px;max-width:96vw;max-height:88vh;overflow:auto;padding:18px}
+  .modal h2{font-size:14px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .modal h3{font-size:12px;margin:14px 0 8px;color:var(--text);text-transform:uppercase;letter-spacing:.04em}
+  .modal .actions{display:flex;gap:8px;margin-top:18px;justify-content:flex-end}
+  .cfg-table{width:100%;border-collapse:collapse;font-size:11px}
+  .cfg-table th,.cfg-table td{border:1px solid var(--border);padding:5px 7px;text-align:center}
+  .cfg-table th{background:var(--panel2);color:var(--muted);font-weight:600;text-transform:uppercase;font-size:9px}
+  .cfg-table input{width:54px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:3px 5px;font-size:11px;text-align:center}
+  .cfg-table input[type=checkbox]{width:auto}
+  .cfg-err{color:var(--warn);font-size:11px;margin-top:8px;white-space:pre-line}
 </style>
 </head>
 <body>
 <div id="app">
   <header>
     <h1>Solar + Battery Buildout — Modular DC Bus Coupling</h1>
-    <div class="sub">4 MPPTs · 3 battery banks (bi-dir DC-DC) · grid AC-DC charger · 3 grid-forming DC-AC converters · common ~400V DC bus · existing 12-wire trunk</div>
+    <div class="sub">4 MPPTs · 4 battery banks (bi-dir DC-DC) · grid AC-DC charger · 3 grid-forming DC-AC converters · common ~400V DC bus · existing 12-wire trunk</div>
   </header>
 
   <div class="controls">
+    <div class="ctrl clock">
+      <label>Time of day · <span id="clockVal">00:00</span></label>
+      <input type="range" id="clockSlider" min="0" max="24" step="0.1" value="0" />
+      <span class="val" id="phaseVal">night</span>
+    </div>
     <div class="ctrl">
-      <label>Solar power</label>
-      <input type="range" id="solarSlider" min="0" max="32" step="0.5" value="0" />
-      <span class="val" id="solarVal">0 kW</span>
+      <label>Overcast</label>
+      <button class="btn toggle" id="overcastBtn">Clear</button>
+    </div>
+    <div class="ctrl">
+      <label>Config</label>
+      <button class="btn" id="configBtn">Edit config…</button>
     </div>
     <div class="ctrl">
       <label>3φ Delta load (230V Δ@60A)</label>
@@ -72,21 +100,6 @@
       <input type="range" id="oneSlider" min="0" step="0.5" value="0" />
       <span class="val" id="oneVal">0 kW</span>
     </div>
-    <div class="ctrl battery">
-      <label>Bank A SoC (350V/15kWh)</label>
-      <input type="range" id="socA" min="0" max="100" step="1" value="50" />
-      <span class="val" id="socAVal">50%</span>
-    </div>
-    <div class="ctrl battery">
-      <label>Bank B SoC (400V/20kWh)</label>
-      <input type="range" id="socB" min="0" max="100" step="1" value="50" />
-      <span class="val" id="socBVal">50%</span>
-    </div>
-    <div class="ctrl battery">
-      <label>Bank C SoC (480V/10kWh)</label>
-      <input type="range" id="socC" min="0" max="100" step="1" value="50" />
-      <span class="val" id="socCVal">50%</span>
-    </div>
   </div>
 
   <div class="main">
@@ -99,7 +112,7 @@
       <div class="tooltip" id="tooltip"></div>
     </div>
     <aside class="side">
-      <h2>System state</h2>
+      <h2>Simulation state</h2>
       <div class="summary" id="summary"></div>
       <div class="legend">
         <div class="row"><span class="swatch" style="background:var(--solar)"></span>Solar → MPPT → bus</div>
@@ -109,15 +122,47 @@
         <div class="row"><span class="swatch" style="background:var(--dc)"></span>Bus → DC-AC converters</div>
         <div class="row"><span class="swatch" style="background:var(--ac3)"></span>3-phase AC trunk</div>
         <div class="row"><span class="swatch" style="background:var(--ac1)"></span>1-phase AC trunk</div>
-        <div class="row"><span class="swatch" style="background:var(--off)"></span>Idle / offline</div>
+        <div class="row"><span class="swatch" style="background:var(--off)"></span>Idle / offline / disabled</div>
       </div>
       <div style="margin-top:14px;font-size:11px;color:var(--muted);line-height:1.5;border-top:1px solid var(--border);padding-top:10px">
-        <b>Key idea:</b> DC has no phases. Bus voltage is the coordination signal —
-        drag the sliders and watch the bus voltage move between bands, engaging
-        batteries (charge/discharge) and the grid in priority order.
-        Hover any box for its spec.
+        <b>Key idea:</b> DC has no phases. Bus voltage is the coordination signal.
+        The clock auto-advances (~48s = 1 day); drag the time slider to scrub.
+        Toggle overcast, adjust loads, edit config — all live.
       </div>
     </aside>
+  </div>
+</div>
+
+<!-- Config modal -->
+<div class="modal-overlay" id="configModal">
+  <div class="modal">
+    <h2>System Configuration</h2>
+    <h3>MPPTs / Solar sub-arrays</h3>
+    <table class="cfg-table" id="mpptTable">
+      <thead>
+        <tr>
+          <th>Enable</th><th>ID</th><th>Panels</th><th>Series</th><th>Parallel</th>
+          <th>Watt STC</th><th>Vmp STC</th><th>Voc STC</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <h3>Battery banks</h3>
+    <table class="cfg-table" id="bankTable">
+      <thead>
+        <tr>
+          <th>Enable</th><th>ID</th><th>Nominal V</th><th>kWh</th>
+          <th>Max Charge A</th><th>Max Discharge A</th><th>SoC %</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="cfg-err" id="cfgErr"></div>
+    <div class="actions">
+      <button class="btn" id="cfgReset">Reset to defaults</button>
+      <button class="btn" id="cfgCancel">Cancel</button>
+      <button class="btn" id="cfgSave">Save</button>
+    </div>
   </div>
 </div>
 

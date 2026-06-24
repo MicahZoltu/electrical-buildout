@@ -1,14 +1,16 @@
 /* render.js — SVG rendering from model state. Kept simple, untested.
-   Exposes init() to draw static boxes once, and render(state) to redraw
-   the dynamic layer (flows, voltages, dimming) on every slider tick.
-   Also exposes attachTooltips(tooltipEl) for hover handling.
+   Exposes init(svg, config) to draw static boxes once (config-driven, so
+   enabled/disabled MPPTs and banks render correctly), and render(state) to
+   redraw the dynamic layer (flows, voltages, SoC bars, dimming) on every
+   sim tick. Also exposes attachTooltips(tooltipEl) for hover handling.
 */
-import { CONST, PARTS } from './model.js';
+import { CONST, PARTS, mpptVmp } from './model.js';
+import { DEFAULT_CONFIG } from './config.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 
 /* ---------- LAYOUT GRID ----------
-   Solar (4 MPPTs) stacked top, batteries (3) middle, grid bottom — left side.
+   Solar (4 MPPTs) stacked top, batteries (4) middle, grid bottom — left side.
    DC bus vertical rail. 3 DC-AC converters (delta, wye, 1-phase) right.
 */
 const LAY = {
@@ -25,22 +27,24 @@ const SOLAR = [
   { id:'sol4', name:'Sub-array 4', sub:'Future · 20 panels', x:LAY.src, y:315 },
 ];
 const MPPT = [
-  { id:'mppt1', sub:'sol1', name:'MPPT 1', x:LAY.dcdc, y:90 },
-  { id:'mppt2', sub:'sol2', name:'MPPT 2', x:LAY.dcdc, y:165 },
-  { id:'mppt3', sub:'sol3', name:'MPPT 3', x:LAY.dcdc, y:240 },
-  { id:'mppt4', sub:'sol4', name:'MPPT 4', x:LAY.dcdc, y:315 },
+  { id:'mppt1', sub:'sol1', name:'MPPT 1', x:LAY.dcdc, y:90,  bankIdx: 0 },
+  { id:'mppt2', sub:'sol2', name:'MPPT 2', x:LAY.dcdc, y:165, bankIdx: 1 },
+  { id:'mppt3', sub:'sol3', name:'MPPT 3', x:LAY.dcdc, y:240, bankIdx: 2 },
+  { id:'mppt4', sub:'sol4', name:'MPPT 4', x:LAY.dcdc, y:315, bankIdx: 3 },
 ];
 
-// Battery banks (3) + DC-DC converters
+// Battery banks (4: A/B/C/D) + DC-DC converters — D added in Session 3.
 const BANKS = [
-  { id:'A', x:LAY.src, y:440 },
-  { id:'B', x:LAY.src, y:540 },
-  { id:'C', x:LAY.src, y:640 },
+  { id:'A', x:LAY.src, y:430 },
+  { id:'B', x:LAY.src, y:510 },
+  { id:'C', x:LAY.src, y:590 },
+  { id:'D', x:LAY.src, y:670 },
 ];
 const DCDC = [
-  { id:'dcdcA', bank:'A', x:LAY.dcdc, y:440 },
-  { id:'dcdcB', bank:'B', x:LAY.dcdc, y:540 },
-  { id:'dcdcC', bank:'C', x:LAY.dcdc, y:640 },
+  { id:'dcdcA', bank:'A', x:LAY.dcdc, y:430 },
+  { id:'dcdcB', bank:'B', x:LAY.dcdc, y:510 },
+  { id:'dcdcC', bank:'C', x:LAY.dcdc, y:590 },
+  { id:'dcdcD', bank:'D', x:LAY.dcdc, y:670 },
 ];
 
 const GRID = { id:'grid', x:LAY.src, y:740 };
@@ -108,11 +112,18 @@ const loadLeft   = l => l.x - BS.loadW/2;
 
 /* ---------- STATE ---------- */
 let gNodes, gFlows, gLabels, dynLayer=null;
+let activeConfig = DEFAULT_CONFIG;
 
-export function init(svg) {
+export function init(svg, config) {
+  activeConfig = config || DEFAULT_CONFIG;
   gFlows  = svg.querySelector('#g-flows');
   gNodes  = svg.querySelector('#g-nodes');
   gLabels = svg.querySelector('#g-labels');
+  // Clear any previous static content (supports hot re-init on config save).
+  if (gFlows)  gFlows.innerHTML = '';
+  if (gNodes)  gNodes.innerHTML = '';
+  if (gLabels) gLabels.innerHTML = '';
+  dynLayer = null;
   drawStatic();
 }
 
@@ -129,17 +140,28 @@ function drawStatic() {
   SOLAR.forEach(s => gNodes.appendChild(box({
     id:s.id, x:s.x, y:s.y, w:BS.srcW, h:BS.srcH, name:s.name, sub:s.sub, color:'var(--solar)',
   })));
-  // MPPTs
-  MPPT.forEach(m => gNodes.appendChild(box({
-    id:m.id, x:m.x, y:m.y, w:BS.dcdcW, h:BS.dcdcH, name:m.name, sub:'tracks MPP', color:'var(--solar)', accent:'isolated',
-  })));
+  // MPPTs — sub label driven by config (panels / Vmp)
+  MPPT.forEach((m, i) => {
+    const cfg = activeConfig.mppts[i];
+    const sub = cfg ? `${cfg.panels}p · ${cfg.series}s${cfg.parallel}p` : 'tracks MPP';
+    gNodes.appendChild(box({
+      id:m.id, x:m.x, y:m.y, w:BS.dcdcW, h:BS.dcdcH, name:m.name, sub, color:'var(--solar)', accent:'isolated',
+    }));
+  });
 
-  // Battery banks
-  CONST.banks.forEach((b,i) => gNodes.appendChild(box({
-    id:'bank'+b.id, x:BANKS[i].x, y:BANKS[i].y, w:BS.srcW, h:BS.srcH,
-    name:'Battery Bank '+b.id, sub:b.sub, color:'var(--battery)', accent:'SoC slider →',
-  })));
-  // DC-DC converters
+  // Battery banks (config-driven: nominalV / kWh + SoC bar placeholder slot)
+  activeConfig.banks.forEach((b, i) => {
+    gNodes.appendChild(box({
+      id:'bank'+b.id, x:BANKS[i].x, y:BANKS[i].y, w:BS.srcW, h:BS.srcH,
+      name:'Battery Bank '+b.id, sub:`${b.nominalV}V · ${b.kwh}kWh`, color:'var(--battery)', accent:'SoC →',
+    }));
+    // SoC fill bar background (track)
+    const bx = BANKS[i].x - BS.srcW/2 + 10;
+    const by = BANKS[i].y + BS.srcH/2 - 12;
+    gNodes.appendChild(el('rect',{id:'socTrack-'+b.id, x:bx, y:by, width:BS.srcW-20, height:6, rx:3, ry:3, fill:'var(--off)'}));
+    gNodes.appendChild(el('rect',{id:'socFill-'+b.id, x:bx, y:by, width:0, height:6, rx:3, ry:3, fill:'var(--battery)'}));
+  });
+  // DC-DC converters (4)
   DCDC.forEach(d => gNodes.appendChild(box({
     id:d.id, x:d.x, y:d.y, w:BS.dcdcW, h:BS.dcdcH, name:'DC-DC '+d.id.slice(-1), sub:'bi-dir', color:'var(--battery)', accent:'profile-locked',
   })));
@@ -173,7 +195,7 @@ function drawStatic() {
   const skel = (x1,y1,x2,y2) => gFlows.appendChild(line(x1,y1,x2,y2,'var(--off)',1.5,'flow',false));
   // solar → mppt
   MPPT.forEach((m,i) => skel(right(SOLAR[i]), SOLAR[i].y, dcdcLeft(m), m.y));
-  // battery → dcdc
+  // battery → dcdc (now 4)
   DCDC.forEach((d,i) => skel(right(BANKS[i], BS.srcW), BANKS[i].y, dcdcLeft(d), d.y));
   // grid → acdc
   skel(right(GRID, BS.srcW), GRID.y, dcdcLeft(ACDC), ACDC.y);
@@ -189,6 +211,18 @@ function drawStatic() {
 function clearDyn(){ if (dynLayer) { dynLayer.remove(); dynLayer=null; } }
 function dynLine(x1,y1,x2,y2,color,w=3.5,animated=true,reverse=false){ return line(x1,y1,x2,y2,color,w,'flow',animated,reverse); }
 function dim(id){ const n=document.getElementById(id); if(n) n.classList.add('node-off'); }
+function unDim(id){ const n=document.getElementById(id); if(n) n.classList.remove('node-off'); }
+
+// Set the SoC fill bar width + color for a bank (by id).
+function setSocBar(bankId, soc) {
+  const fill = document.getElementById('socFill-'+bankId);
+  const track = document.getElementById('socTrack-'+bankId);
+  if (!fill || !track) return;
+  const w = parseFloat(track.getAttribute('width')) || (BS.srcW - 20);
+  fill.setAttribute('width', (w * clamp(soc, 0, 100) / 100).toFixed(1));
+  const color = soc > 50 ? 'var(--battery)' : (soc >= 20 ? 'var(--solar)' : 'var(--warn)');
+  fill.setAttribute('fill', color);
+}
 
 export function render(state) {
   clearDyn();
@@ -196,36 +230,60 @@ export function render(state) {
   document.querySelectorAll('[id^="node-"]').forEach(n => n.classList.remove('node-off'));
 
   const C = CONST;
+  const perMpptKW = state.perMpptKW || [];   // from sim: per-MPPT power kW
+  const vmpByMppt = state.vmpByMppt || [];   // per-MPPT Vmp display volts
+  const perBankById = {};                    // index perBank by id for quick lookup
+  (state.perBank || []).forEach(p => { perBankById[p.id] = p; });
 
   // ---- Solar sub-arrays → MPPT → bus ----
-  state.solarPerMppt.forEach((kw, i) => {
-    const s = SOLAR[i], m = MPPT[i];
-    if (kw <= 0) { dim('node-'+s.id); dim('node-'+m.id); return; }
+  MPPT.forEach((m, i) => {
+    const s = SOLAR[i];
+    const cfg = activeConfig.mppts[i];
+    const disabled = cfg && cfg.enabled === false;
+    const kw = perMpptKW[i] || 0;
+    if (disabled || kw <= 0) {
+      dim('node-'+s.id); dim('node-'+m.id);
+      if (disabled) {
+        // disabled tag on MPPT
+        dynLayer.appendChild(text(m.x, m.y+BS.dcdcH/2+12, 'disabled', 'box-label', {'text-anchor':'middle','fill':'var(--warn)','font-size':9}));
+      }
+      return;
+    }
     dynLayer.appendChild(dynLine(right(s), s.y, dcdcLeft(m), m.y, 'var(--solar)'));
     dynLayer.appendChild(dynLine(dcdcRight(m), m.y, busLeft(), m.y, 'var(--solar)'));
-    dynLayer.appendChild(text(s.x, s.y-BS.srcH/2-8, kw+' kW', 'box-label', {'text-anchor':'middle','fill':'var(--solar)','font-size':11,'font-weight':700}));
-    dynLayer.appendChild(text((s.x+m.x)/2, s.y-8, '~Vmp', 'box-label', {'text-anchor':'middle','fill':'var(--muted)','font-size':9}));
+    dynLayer.appendChild(text(s.x, s.y-BS.srcH/2-8, kw.toFixed(1)+' kW', 'box-label', {'text-anchor':'middle','fill':'var(--solar)','font-size':11,'font-weight':700}));
+    // dynamic Vmp label (replaces the old static "~Vmp")
+    const vmp = vmpByMppt[i];
+    const vmpTxt = (vmp != null) ? Math.round(vmp)+'V' : '~Vmp';
+    dynLayer.appendChild(text((s.x+m.x)/2, s.y-8, vmpTxt, 'box-label', {'text-anchor':'middle','fill':'var(--muted)','font-size':9}));
   });
 
   // ---- Batteries → DC-DC → bus ----
-  state.perBank.forEach((p, i) => {
-    const b = BANKS[i], d = DCDC[i];
-    const bankId = 'node-bank'+p.id;
-    if (p.mode === 'idle') { dim(bankId); dim('node-'+d.id); return; }
+  activeConfig.banks.forEach((b, i) => {
+    const bankNode = BANKS[i], d = DCDC[i];
+    const p = perBankById[b.id];
+    // Update SoC bar for every bank (even disabled, shows 0)
+    const soc = p ? p.soc : (b.enabled === false ? 0 : (b.soc || 0));
+    setSocBar(b.id, soc);
+    if (b.enabled === false) {
+      dim('node-bank'+b.id); dim('node-'+d.id);
+      dynLayer.appendChild(text(bankNode.x, bankNode.y+BS.srcH/2+12, 'disabled', 'box-label', {'text-anchor':'middle','fill':'var(--warn)','font-size':9}));
+      return;
+    }
+    if (!p || p.mode === 'idle') { dim('node-bank'+b.id); dim('node-'+d.id); return; }
     const color = p.mode === 'charge' ? 'var(--solar)' : 'var(--battery)';
     const rev = p.mode === 'charge';   // charging: current flows bus → battery (right to left)
-    dynLayer.appendChild(dynLine(right(b, BS.srcW), b.y, dcdcLeft(d), d.y, color, 3.5, true, rev));
+    dynLayer.appendChild(dynLine(right(bankNode, BS.srcW), bankNode.y, dcdcLeft(d), d.y, color, 3.5, true, rev));
     dynLayer.appendChild(dynLine(dcdcRight(d), d.y, busLeft(), d.y, color, 3.5, true, rev));
-    // voltage label on the battery→dcdc line
-    const tag = p.mode === 'charge' ? '+'+p.kw+' kW →' : p.kw+' kW ←';
-    dynLayer.appendChild(text(b.x, b.y-BS.srcH/2-8, p.vBat+'V · '+tag, 'box-label', {'text-anchor':'middle','fill':color,'font-size':10,'font-weight':600}));
+    const tag = p.mode === 'charge' ? '+'+p.kw.toFixed(1)+' kW →' : p.kw.toFixed(1)+' kW ←';
+    dynLayer.appendChild(text(bankNode.x, bankNode.y-BS.srcH/2-8, Math.round(p.vBat)+'V · '+tag, 'box-label', {'text-anchor':'middle','fill':color,'font-size':10,'font-weight':600}));
   });
 
   // ---- Grid / AC-DC → bus ----
   if (state.gridKW > 0) {
     dynLayer.appendChild(dynLine(right(GRID, BS.srcW), GRID.y, dcdcLeft(ACDC), ACDC.y, 'var(--grid)'));
     dynLayer.appendChild(dynLine(dcdcRight(ACDC), ACDC.y, busLeft(), ACDC.y, 'var(--grid)'));
-    dynLayer.appendChild(text(GRID.x, GRID.y-BS.srcH/2-8, state.gridKW+' kW', 'box-label', {'text-anchor':'middle','fill':'var(--grid)','font-size':12,'font-weight':700}));
+    dynLayer.appendChild(text(GRID.x, GRID.y-BS.srcH/2-8, state.gridKW.toFixed(1)+' kW', 'box-label', {'text-anchor':'middle','fill':'var(--grid)','font-size':12,'font-weight':700}));
     dynLayer.appendChild(text((GRID.x+ACDC.x)/2, GRID.y-8, '230V AC', 'box-label', {'text-anchor':'middle','fill':'var(--muted)','font-size':9}));
   } else {
     dim('node-grid'); dim('node-acdc');
@@ -274,8 +332,8 @@ export function attachTooltips(tipEl) {
   const map = {
     'node-sol1':PARTS.mppt,'node-sol2':PARTS.mppt,'node-sol3':PARTS.mppt,'node-sol4':PARTS.mppt,
     'node-mppt1':PARTS.mppt,'node-mppt2':PARTS.mppt,'node-mppt3':PARTS.mppt,'node-mppt4':PARTS.mppt,
-    'node-bankA':PARTS.bank,'node-bankB':PARTS.bank,'node-bankC':PARTS.bank,
-    'node-dcdcA':PARTS.dcdc,'node-dcdcB':PARTS.dcdc,'node-dcdcC':PARTS.dcdc,
+    'node-bankA':PARTS.bank,'node-bankB':PARTS.bank,'node-bankC':PARTS.bank,'node-bankD':PARTS.bank,
+    'node-dcdcA':PARTS.dcdc,'node-dcdcB':PARTS.dcdc,'node-dcdcC':PARTS.dcdc,'node-dcdcD':PARTS.dcdc,
     'node-grid':PARTS.acdc,'node-acdc':PARTS.acdc,
     'node-dcacDelta':PARTS.dcac3,'node-dcacWye':PARTS.dcac3,'node-dcacOne':PARTS.dcac1,
     'node-dcbus':PARTS.dcbus,
@@ -296,3 +354,5 @@ export function attachTooltips(tipEl) {
     n.addEventListener('mouseleave', () => tipEl.style.display = 'none');
   });
 }
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
