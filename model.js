@@ -3,6 +3,7 @@
    Exports pure functions + a CONSTANTS/PARTS object. All functions take
    plain data and return plain data. Side-effect free. Bun:test covers it.
 */
+import { DEFAULT_CONFIG } from './config.js';
 
 /* ============================ CONSTANTS ============================ */
 
@@ -16,6 +17,10 @@ export const CONST = {
   // SoC limits
   SoCfloor: 0,        // percent
   SoCfull: 100,       // percent
+
+  // Battery charge profile (Session 2)
+  cvKneeSoC: 90,            // % — CC→CV transition (upper knee of voltage curve)
+  cvSetpointFactor: 1.10,   // × nominalV — full-charge / CV setpoint voltage
 
   // Solar: 4 MPPTs × 8 kW each (20 panels × ~400 W, 10s2p)
   solarMax: 32,
@@ -92,29 +97,29 @@ export const PARTS = {
 
 /* ============================ BATTERY VOLTAGE (plateau with droop) ============================ */
 
-// V = nominalV × factor(soc). Plateau 10–90% ~flat, droop at extremes.
-// 0%  → 0.90   (deep discharge floor)
-// 10% → 0.97   (knee)
-// 90% → 1.00   (knee)
-// 100%→ 1.10   (full charge ceiling)
+// V = nominalV × factor(soc). LiFePO4-style plateau: flat 10–90%, droop at ends.
+//  0%  → 0.88   (deep discharge floor)
+// 10%  → 0.95   (lower knee)
+// 90%  → 1.03   (upper knee — CC→CV transition; crosses CV setpoint here)
+// 100% → 1.10   (full charge ceiling = CV setpoint)
 export function batteryVoltage(nominalV, soc) {
   soc = clamp(soc, 0, 100);
   let f;
-  if (soc <= 10)      f = lerp(0.90, 0.97, soc / 10);
-  else if (soc <= 90) f = lerp(0.97, 1.00, (soc - 10) / 80);   // gentle rise across plateau
-  else                f = lerp(1.00, 1.10, (soc - 90) / 10);
+  if (soc <= 10)      f = lerp(0.88, 0.95, soc / 10);
+  else if (soc <= 90) f = lerp(0.95, 1.03, (soc - 10) / 80);   // gentle rise across plateau
+  else                f = lerp(1.03, 1.10, (soc - 90) / 10);
   return round(nominalV * f, 1);
 }
 
 /* ============================ BATTERY MODE ============================ */
 
 // Returns 'charge' | 'discharge' | 'idle' based on bus voltage band + SoC.
+// SoC=0 blocks discharge only (charging still allowed); SoC=100 blocks charge
+// only (discharging still allowed).
 export function batteryMode(busV, soc) {
   soc = clamp(soc, 0, 100);
-  if (soc <= 0)  return soc > 0 ? 'discharge' : 'idle';   // empty → can't discharge
-  if (soc >= 100) return 'idle';                          // full → can't charge
-  if (busV >= CONST.Vcharge)     return 'charge';
-  if (busV <= CONST.Vdischarge)  return 'discharge';
+  if (busV >= CONST.Vcharge && soc < 100) return 'charge';      // bus high + room → charge
+  if (busV <= CONST.Vdischarge && soc > 0) return 'discharge';  // bus low + energy → discharge
   return 'idle';
 }
 
@@ -223,6 +228,143 @@ export function computeState({ solarTotal, load, soc }) {
     solarToLoad: round(Math.min(solarTotal, totalLoad), 1),
     solarToCharge: chargeKW,
   };
+}
+
+/* ============================ SIM REGIME (computeStateSim) ============================ */
+
+// Simulation-oriented regime. Reads live SoC from `banks[i].soc` (mutated each
+// tick by stepBatteries) and the config object. Respects each bank's `enabled`
+// flag and applies CC/CV per-bank charge kW allocation. Same guarantees as
+// computeState: grid⇒no charge, no opposite modes, SoC limits, per-bank caps.
+//
+// Inputs: { solarTotalKW, loads:{delta,wye,one}, banks:[{...config, soc}], config }
+// Returns: { regime, busV, chargeKW, dischargeKW, gridKW, perBank[] }
+export function computeStateSim({ solarTotalKW, loads, banks, config } = {}) {
+  const cfg = config || DEFAULT_CONFIG;
+  const bankCfgs = (banks && banks.length ? banks : cfg.banks);
+
+  // Active (enabled) bank descriptors: { cfg, soc, vBat, mode (tentative) }.
+  const active = [];
+  for (const b of bankCfgs) {
+    if (!b || b.enabled === false) continue;
+    const soc = clamp(b.soc, 0, 100);
+    active.push({
+      id: b.id,
+      cfg: b,
+      soc,
+      vBat: batteryVoltage(b.nominalV, soc),
+      maxChargeKW: b.maxChargeA * b.nominalV / 1000,
+      maxDischargeKW: b.maxDischargeA * b.nominalV / 1000,
+    });
+  }
+
+  const load = loadPerTrunk(loads || {});
+  const totalLoad = round(load.delta + load.wye + load.one, 2);
+  const solar = Math.max(0, Number(solarTotalKW) || 0);
+  const net = solar - totalLoad;     // +surplus, -deficit
+
+  const canDischargeTotal = active.reduce((s, b) => s + (b.soc > 0 ? b.maxDischargeKW : 0), 0);
+  const canChargeTotal   = active.reduce((s, b) => s + (b.soc < 100 ? b.maxChargeKW : 0), 0);
+
+  let busV, regime, chargeKW = 0, dischargeKW = 0, gridKW = 0;
+
+  if (net > 0) {
+    // SURPLUS: solar holds bus high; batteries charge if they can (CC/CV).
+    regime = 'surplus';
+    busV = clamp(CONST.Vcharge + Math.min(net, 20), CONST.Vcharge, CONST.Vsolar + 5);
+    chargeKW = Math.min(net, canChargeTotal);
+  } else if (net < 0) {
+    const deficit = -net;
+    if (canDischargeTotal >= deficit) {
+      regime = 'discharge';
+      busV = CONST.Vdischarge;
+      dischargeKW = deficit;
+    } else {
+      regime = 'grid';
+      busV = CONST.Vgrid;
+      dischargeKW = canDischargeTotal;      // batteries give all they can
+      gridKW = deficit - canDischargeTotal; // grid tops up the rest
+    }
+  } else {
+    regime = 'idle';
+    busV = 400;
+  }
+
+  // Per-bank kW allocation, applying CC/CV on charge and proportional caps on discharge.
+  const perBank = active.map(b => {
+    const mode = batteryMode(busV, b.soc);   // 'charge' | 'discharge' | 'idle'
+    let kw = 0;
+    if (mode === 'charge' && chargeKW > 0) {
+      kw = bankChargeKW(b, chargeKW, canChargeTotal);   // CC/CV-aware
+    } else if (mode === 'discharge' && dischargeKW > 0) {
+      kw = Math.min(b.maxDischargeKW, dischargeKW * (b.maxDischargeKW / canDischargeTotal));
+    }
+    return { id: b.id, mode, vBat: b.vBat, kw: round(kw, 2), soc: b.soc };
+  });
+
+  chargeKW   = round(perBank.filter(p => p.mode === 'charge').reduce((s, p) => s + p.kw, 0), 2);
+  dischargeKW = round(perBank.filter(p => p.mode === 'discharge').reduce((s, p) => s + p.kw, 0), 2);
+
+  return {
+    regime,
+    busV: round(busV, 1),
+    solarTotalKW: round(solar, 2),
+    totalLoad: round(load.delta + load.wye + load.one, 2),
+    loads: load,
+    net: round(net, 2),
+    chargeKW,
+    dischargeKW,
+    gridKW: round(gridKW, 2),
+    perBank,
+  };
+}
+
+// Per-bank charge kW with CC/CV: full (CC) current below cvKneeSoC, then
+// current tapers linearly to 0 as SoC→100 (CV phase). The bank's share is
+// computed proportionally first, then the CV taper is applied on top.
+function bankChargeKW(b, chargeKW, canChargeTotal) {
+  if (canChargeTotal <= 0) return 0;
+  let kw = Math.min(b.maxChargeKW, chargeKW * (b.maxChargeKW / canChargeTotal));
+  if (b.soc >= CONST.cvKneeSoC) {
+    const taper = (100 - b.soc) / (100 - CONST.cvKneeSoC);   // 1 at knee → 0 at 100
+    kw *= clamp(taper, 0, 1);
+  }
+  return kw;
+}
+
+/* ============================ STEP BATTERIES ============================ */
+
+// Mutates each enabled bank's SoC over one timestep based on the per-bank kW
+// (which already encodes CC vs CV via computeStateSim). Disabled banks are
+// passed through unchanged (idle, kW 0). Returns a fresh perBank[] array with
+// updated { id, mode, vBat, kw, soc }.
+//
+//   charge:   soc += chargeKW * dtHours / kwh * 100   (capped at 100)
+//   discharge: soc -= dischargeKW * dtHours / kwh * 100 (floored at 0)
+//   idle:     no change
+export function stepBatteries(state, dtHours) {
+  const dt = clamp(Number(dtHours) || 0, 0, Infinity);
+  const cfgBank = (id) => DEFAULT_CONFIG.banks.find(b => b.id === id);
+  const perBank = (state && state.perBank) || [];
+
+  const out = [];
+  for (const p of perBank) {
+    const cfg = p.cfg || cfgBank(p.id);
+    if (!cfg) continue;
+    if (cfg.enabled === false) {
+      out.push({ id: p.id, mode: 'idle', vBat: batteryVoltage(cfg.nominalV, p.soc), kw: 0, soc: p.soc });
+      continue;
+    }
+    let soc = clamp(p.soc, 0, 100);
+    if (p.mode === 'charge' && p.kw > 0) {
+      soc += p.kw * dt / cfg.kwh * 100;
+    } else if (p.mode === 'discharge' && p.kw > 0) {
+      soc -= p.kw * dt / cfg.kwh * 100;
+    }
+    soc = clamp(soc, 0, 100);
+    out.push({ id: p.id, mode: p.mode, vBat: batteryVoltage(cfg.nominalV, soc), kw: p.kw, soc: round(soc, 4) });
+  }
+  return out;
 }
 
 /* ============================ IRRADIANCE (equatorial equinox) ============================ */
