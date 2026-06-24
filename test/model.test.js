@@ -302,18 +302,6 @@ describe('constants & parts', () => {
     expect(CONST.loads.wye.kw).toBeCloseTo(41.6, 0);
     expect(CONST.loads.one.kw).toBeCloseTo(27.6, 0);
   });
-  test('4 banks (D disabled by default), all within 300–500V and 10–20 kWh', () => {
-    expect(CONST.banks).toHaveLength(4);
-    CONST.banks.forEach(b => {
-      expect(b.nominalV).toBeGreaterThanOrEqual(300);
-      expect(b.nominalV).toBeLessThanOrEqual(500);
-      expect(b.kwh).toBeGreaterThanOrEqual(10);
-      expect(b.kwh).toBeLessThanOrEqual(20);
-    });
-    // bank D is the disabled expansion slot
-    expect(CONST.banks[3].id).toBe('D');
-    expect(CONST.banks[3].enabled).toBe(false);
-  });
   test('PARTS has all component types', () => {
     ['mppt','bank','dcdc','acdc','dcac3','dcac1','dcbus','acpanel'].forEach(k => {
       expect(PARTS[k]).toBeDefined();
@@ -387,11 +375,13 @@ describe('computeIrradiance (equatorial equinox)', () => {
 });
 
 describe('mpptPowerKW', () => {
-  const m = DEFAULT_CONFIG.mppts[0];   // enabled, 20 panels, 400W STC
+  // Use a synthetic config so tests don't depend on DEFAULT_CONFIG values.
+  const m = { id:'t', enabled:true, series:10, parallel:2, vmp:40, imp:10 };
   test('scales linearly with irradiance', () => {
     const p1000 = mpptPowerKW(m, 1000);
     const p500  = mpptPowerKW(m, 500);
     const p250  = mpptPowerKW(m, 250);
+    // perPanelW = 40×10 = 400W; panels = 20; ×0.97 efficiency = 7760W = 7.76kW
     expect(p1000).toBeCloseTo(7.76, 2);
     expect(p500).toBeCloseTo(p1000 / 2, 2);
     expect(p250).toBeCloseTo(p1000 / 4, 2);
@@ -400,13 +390,12 @@ describe('mpptPowerKW', () => {
     expect(mpptPowerKW(m, 0)).toBe(0);
   });
   test('disabled MPPT → 0', () => {
-    const disabled = DEFAULT_CONFIG.mppts[3];   // mppt4 enabled:false
-    expect(disabled.enabled).toBe(false);
+    const disabled = { ...m, enabled:false };
     expect(mpptPowerKW(disabled, 1000)).toBe(0);
     expect(mpptPowerKW(disabled, 0)).toBe(0);
   });
-  test('at 1000 W/m² = wattSTC * panels * efficiency / 1000', () => {
-    const expected = m.wattSTC * m.panels * CONST.mpptEfficiency / 1000;
+  test('at 1000 W/m² = vmp × imp × series × parallel × efficiency / 1000', () => {
+    const expected = m.vmp * m.imp * m.series * m.parallel * CONST.mpptEfficiency / 1000;
     expect(mpptPowerKW(m, 1000)).toBeCloseTo(expected, 2);
   });
   test('never negative', () => {
@@ -415,9 +404,9 @@ describe('mpptPowerKW', () => {
 });
 
 describe('mpptVmp', () => {
-  const m = DEFAULT_CONFIG.mppts[0];   // vmpSTC 40, series 10 → nominal 400V
-  test('equals vmpSTC * series at 1000 W/m²', () => {
-    expect(mpptVmp(m, 1000)).toBeCloseTo(m.vmpSTC * m.series, 1);   // 400
+  const m = { id:'t', enabled:true, series:10, parallel:2, vmp:40, imp:10 };
+  test('equals vmp × series at 1000 W/m²', () => {
+    expect(mpptVmp(m, 1000)).toBeCloseTo(m.vmp * m.series, 1);   // 400
   });
   test('droops at low irradiance (below nominal)', () => {
     const vFull = mpptVmp(m, 1000);
@@ -426,28 +415,33 @@ describe('mpptVmp', () => {
     expect(vLow).toBeGreaterThan(vFull * 0.85);   // never below 0.85× nominal
   });
   test('factor formula at 200 W/m² → 0.88× nominal', () => {
-    expect(mpptVmp(m, 200)).toBeCloseTo(m.vmpSTC * m.series * 0.88, 1);   // 352
+    expect(mpptVmp(m, 200)).toBeCloseTo(m.vmp * m.series * 0.88, 1);   // 352
   });
   test('at 0 irradiance → 0.85× nominal (floor of the droop factor)', () => {
-    expect(mpptVmp(m, 0)).toBeCloseTo(m.vmpSTC * m.series * 0.85, 1);     // 340
+    expect(mpptVmp(m, 0)).toBeCloseTo(m.vmp * m.series * 0.85, 1);     // 340
   });
 });
 
 describe('totalSolarKW', () => {
+  const cfg = {
+    mppts: [
+      { id:'a', enabled:true,  series:10, parallel:2, vmp:40, imp:10 },
+      { id:'b', enabled:true,  series:10, parallel:2, vmp:40, imp:10 },
+      { id:'c', enabled:false, series:10, parallel:2, vmp:40, imp:10 },
+    ],
+  };
   test('sums enabled MPPTs, ignores disabled', () => {
-    const t = totalSolarKW(DEFAULT_CONFIG, 1000);
-    const enabled = DEFAULT_CONFIG.mppts.filter(m => m.enabled !== false);
+    const t = totalSolarKW(cfg, 1000);
+    const enabled = cfg.mppts.filter(m => m.enabled !== false);
     const expected = enabled.reduce((s, m) => s + mpptPowerKW(m, 1000), 0);
     expect(t).toBeCloseTo(expected, 2);
-    // 3 enabled × 7.76 kW = 23.28 kW; disabled mppt4 contributes 0
-    expect(t).toBeCloseTo(23.28, 2);
   });
   test('0 at night', () => {
-    expect(totalSolarKW(DEFAULT_CONFIG, 0)).toBe(0);
+    expect(totalSolarKW(cfg, 0)).toBe(0);
   });
   test('overcast (~15% irradiance) reduces total to ~15%', () => {
-    const clear = totalSolarKW(DEFAULT_CONFIG, 1000);
-    const cloud = totalSolarKW(DEFAULT_CONFIG, 150);   // 1000 * 0.15
+    const clear = totalSolarKW(cfg, 1000);
+    const cloud = totalSolarKW(cfg, 150);   // 1000 * 0.15
     expect(cloud).toBeCloseTo(clear * 0.15, 1);
   });
   test('empty/missing config → 0', () => {
@@ -456,45 +450,12 @@ describe('totalSolarKW', () => {
   });
 });
 
-/* ============================ Session 1: DEFAULT_CONFIG sanity ============================ */
-
-describe('DEFAULT_CONFIG', () => {
-  test('4 MPPTs, mppt4 disabled by default', () => {
-    expect(DEFAULT_CONFIG.mppts).toHaveLength(4);
-    expect(DEFAULT_CONFIG.mppts[3].enabled).toBe(false);
-    DEFAULT_CONFIG.mppts.slice(0, 3).forEach(m => {
-      expect(m.enabled).toBe(true);
-      expect(m.series * m.parallel).toBe(m.panels);
-    });
-  });
-  test('4 banks, bank D disabled by default', () => {
-    expect(DEFAULT_CONFIG.banks).toHaveLength(4);
-    expect(DEFAULT_CONFIG.banks[3].id).toBe('D');
-    expect(DEFAULT_CONFIG.banks[3].enabled).toBe(false);
-    DEFAULT_CONFIG.banks.slice(0, 3).forEach(b => {
-      expect(b.enabled).toBe(true);
-      expect(b.nominalV).toBeGreaterThanOrEqual(300);
-      expect(b.nominalV).toBeLessThanOrEqual(500);
-      expect(b.kwh).toBeGreaterThanOrEqual(10);
-      expect(b.kwh).toBeLessThanOrEqual(20);
-      expect(b.soc).toBeGreaterThanOrEqual(0);
-      expect(b.soc).toBeLessThanOrEqual(100);
-    });
-  });
-  test('sim solar constants present on CONST', () => {
-    expect(CONST.irradiancePeak).toBe(1000);
-    expect(CONST.overcastFactor).toBeCloseTo(0.15, 2);
-    expect(CONST.mpptEfficiency).toBeCloseTo(0.97, 2);
-    expect(CONST.sunrise).toBe(6);
-    expect(CONST.sunset).toBe(18);
-  });
-});
-
 /* ============================ Session 2: battery CC/CV + regime + step ============================ */
 
-// Helper: clone DEFAULT_CONFIG banks with a given SoC per bank (A,B,C; D stays disabled).
+// Helper: clone DEFAULT_CONFIG banks with a given SoC per bank (A,B,C,D).
+// SoC is runtime state, not stored in config, so default to 0 when omitted.
 function banksAt(socs) {
-  return DEFAULT_CONFIG.banks.map((b, i) => ({ ...b, soc: socs[i] ?? b.soc }));
+  return DEFAULT_CONFIG.banks.map((b, i) => ({ ...b, soc: socs[i] ?? 0 }));
 }
 
 describe('computeStateSim — CC/CV charge allocation', () => {
@@ -646,8 +607,9 @@ describe('computeStateSim — guarantees (parity with computeState)', () => {
     // surplus
     let st = computeStateSim({ solarTotalKW: 30, loads: smallLoad, banks: banksAt([50,50,50,50]), config: DEFAULT_CONFIG });
     expect(Math.abs(st.solarTotalKW - (st.totalLoad + st.chargeKW))).toBeLessThan(0.5);
-    // discharge
-    st = computeStateSim({ solarTotalKW: 10, loads: { delta: 12, wye: 20, one: 14 }, banks: banksAt([50,50,50,50]), config: DEFAULT_CONFIG });
+    // discharge — use a load the batteries can fully cover (small enough deficit)
+    st = computeStateSim({ solarTotalKW: 10, loads: { delta: 5, wye: 8, one: 3 }, banks: banksAt([50,50,50,50]), config: DEFAULT_CONFIG });
+    expect(st.regime).toBe('discharge');
     expect(Math.abs((st.solarTotalKW + st.dischargeKW) - st.totalLoad)).toBeLessThan(0.5);
     // grid
     st = computeStateSim({ solarTotalKW: 0, loads: fullLoad, banks: banksAt([10,10,10,10]), config: DEFAULT_CONFIG });

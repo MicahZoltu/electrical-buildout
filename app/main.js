@@ -39,7 +39,6 @@ S.one.max   = CONST.loads.one.kw.toFixed(1);
 /* ---------- PERSISTENCE ---------- */
 const LS = {
   config: 'eb_config',
-  soc:    'eb_soc',
   simHour:'eb_simHour',
   loads:  'eb_loads',
   overcast:'eb_overcast',
@@ -65,22 +64,18 @@ function cloneConfig(cfg) {
 }
 
 let config = loadJSON(LS.config, null) || cloneConfig(DEFAULT_CONFIG);
+// Strip any stale `panels` field from older persisted configs — it's always
+// derived from series × parallel now and never stored.
+config.mppts.forEach(m => { delete m.panels; });
 let simHour = (() => {
   const h = loadJSON(LS.simHour, 0);
   return clampNum(h, 0, 24, 0);
 })();
 let overcast = !!loadJSON(LS.overcast, false);
-const persistedLoads = loadJSON(LS.loads, { delta:0, wye:0, one:0 });
+const persistedLoads = loadJSON(LS.loads, { delta:3, wye:3, one:3 });
 
-// Live bank SoC — read from config banks on first load (their `soc` field),
-// or from persisted eb_soc array if present.
-let banks = config.banks.map((b, i) => {
-  const persistedSoc = loadJSON(LS.soc, null);
-  const soc = Array.isArray(persistedSoc) && persistedSoc[i] != null
-    ? clampNum(persistedSoc[i], 0, 100, b.soc ?? 50)
-    : (b.soc ?? 50);
-  return { ...b, soc };
-});
+// Live bank SoC — always starts at 0% on page load
+let banks = config.banks.map((b) => ({ ...b, soc: 0 }));
 
 // Load slider initial values from persistence
 S.delta.value = persistedLoads.delta ?? 0;
@@ -118,7 +113,9 @@ function frame(now) {
     S.clock.value = simHour;
   }
 
-  tick(dtHours, now);
+  // While scrubbing, the slider's input handler fast-forwards the batteries;
+  // pass dt=0 here so the frame tick only renders, never double-steps.
+  tick(scrubbing ? 0 : dtHours, now);
   requestAnimationFrame(frame);
 }
 
@@ -161,7 +158,6 @@ function tick(dtHours, now) {
   if (now - lastPersist > 1000) {
     lastPersist = now;
     saveJSON(LS.simHour, round(simHour, 3));
-    saveJSON(LS.soc, banks.map(b => round(b.soc, 2)));
     saveJSON(LS.loads, loads);
     saveJSON(LS.overcast, overcast);
     saveJSON(LS.config, config);
@@ -238,15 +234,45 @@ function phaseLabel(h) {
   return 'dusk';
 }
 
+/* ---------- FAST-FORWARD (slider scrub) ---------- */
+// Steps the model from fromHour to toHour (always forward, wrapping past 24)
+// in small increments, mutating bank SoC — but never rendering. Called when
+// the user drags the time slider so the battery state reflects the elapsed
+// simulated time, not just a clock jump.
+function fastForward(fromHour, toHour) {
+  let delta = ((toHour - fromHour) % 24 + 24) % 24;
+  if (delta < 0.001) return;
+  const loads = readLoads();
+  const step = 0.1;   // 6-minute granularity
+  let h = fromHour;
+  let remaining = delta;
+  while (remaining > 0) {
+    const dt = Math.min(step, remaining);
+    h = (h + dt) % 24;
+    const irr = computeIrradiance(h, overcast);
+    const solarKW = totalSolarKW(config, irr);
+    const st = computeStateSim({ solarTotalKW: solarKW, loads, banks, config });
+    const stepped = stepBatteries(st, dt);
+    stepped.forEach(p => {
+      const b = banks.find(bb => bb.id === p.id);
+      if (b) b.soc = p.soc;
+    });
+    remaining -= dt;
+  }
+}
+
 /* ---------- CONTROL WIRING ---------- */
 // Day/night slider: scrub while dragging, resume auto-advance on release.
+// Each input event fast-forwards the simulation to the new time so battery
+// SoC reflects the elapsed simulated duration.
 S.clock.addEventListener('pointerdown', () => { scrubbing = true; });
 S.clock.addEventListener('pointerup',   () => { scrubbing = false; lastFrame = performance.now(); });
 S.clock.addEventListener('pointercancel', () => { scrubbing = false; lastFrame = performance.now(); });
 S.clock.addEventListener('input', () => {
   scrubbing = true;
-  simHour = clampNum(Number(S.clock.value), 0, 24, simHour);
-  // immediate visual feedback even before next frame
+  const target = clampNum(Number(S.clock.value), 0, 24, simHour);
+  fastForward(simHour, target);
+  simHour = target;
   V.clock.textContent = formatTime(simHour);
   V.phase.textContent = phaseLabel(simHour);
 });
@@ -297,12 +323,10 @@ function renderConfigTables() {
     tr.innerHTML = `
       <td><input type="checkbox" data-kind="mppt" data-i="${i}" data-f="enabled" ${m.enabled?'checked':''}></td>
       <td>${m.id}</td>
-      <td><input type="number" min="1" data-kind="mppt" data-i="${i}" data-f="panels" value="${m.panels}"></td>
       <td><input type="number" min="1" data-kind="mppt" data-i="${i}" data-f="series" value="${m.series}"></td>
       <td><input type="number" min="1" data-kind="mppt" data-i="${i}" data-f="parallel" value="${m.parallel}"></td>
-      <td><input type="number" min="1" data-kind="mppt" data-i="${i}" data-f="wattSTC" value="${m.wattSTC}"></td>
-      <td><input type="number" min="1" data-kind="mppt" data-i="${i}" data-f="vmpSTC" value="${m.vmpSTC}"></td>
-      <td><input type="number" min="1" data-kind="mppt" data-i="${i}" data-f="vocSTC" value="${m.vocSTC}"></td>
+      <td><input type="number" min="1" data-kind="mppt" data-i="${i}" data-f="vmp" value="${m.vmp}"></td>
+      <td><input type="number" min="1" data-kind="mppt" data-i="${i}" data-f="imp" value="${m.imp}"></td>
     `;
     mpptTableBody.appendChild(tr);
   });
@@ -317,7 +341,6 @@ function renderConfigTables() {
       <td><input type="number" min="10" max="20" data-kind="bank" data-i="${i}" data-f="kwh" value="${b.kwh}"></td>
       <td><input type="number" min="1" data-kind="bank" data-i="${i}" data-f="maxChargeA" value="${b.maxChargeA}"></td>
       <td><input type="number" min="1" data-kind="bank" data-i="${i}" data-f="maxDischargeA" value="${b.maxDischargeA}"></td>
-      <td><input type="number" min="0" max="100" data-kind="bank" data-i="${i}" data-f="soc" value="${b.soc}"></td>
     `;
     bankTableBody.appendChild(tr);
   });
@@ -340,18 +363,14 @@ function renderConfigTables() {
 function validateConfig(cfg) {
   const errs = [];
   cfg.mppts.forEach((m, i) => {
-    if (m.series * m.parallel !== m.panels) {
-      errs.push(`${m.id}: series × parallel (${m.series}×${m.parallel}=${m.series*m.parallel}) ≠ panels (${m.panels}).`);
-    }
-    if (m.panels < 1 || m.series < 1 || m.parallel < 1) errs.push(`${m.id}: panels/series/parallel must be ≥ 1.`);
-    if (m.wattSTC < 1) errs.push(`${m.id}: wattSTC must be ≥ 1.`);
-    if (m.vmpSTC < 1 || m.vocSTC < 1) errs.push(`${m.id}: Vmp/Voc STC must be ≥ 1.`);
+    if (m.series < 1 || m.parallel < 1) errs.push(`${m.id}: series/parallel must be ≥ 1.`);
+    if (m.vmp < 1) errs.push(`${m.id}: Vmp must be ≥ 1.`);
+    if (m.imp < 1) errs.push(`${m.id}: Imp must be ≥ 1.`);
   });
   cfg.banks.forEach(b => {
     if (b.nominalV < 300 || b.nominalV > 500) errs.push(`Bank ${b.id}: nominalV must be 300–500.`);
     if (b.kwh < 10 || b.kwh > 20) errs.push(`Bank ${b.id}: kwh must be 10–20.`);
     if (b.maxChargeA < 1 || b.maxDischargeA < 1) errs.push(`Bank ${b.id}: max charge/discharge A must be ≥ 1.`);
-    if (b.soc < 0 || b.soc > 100) errs.push(`Bank ${b.id}: SoC must be 0–100.`);
   });
   return errs;
 }
@@ -362,14 +381,13 @@ document.getElementById('cfgSave').addEventListener('click', () => {
   cfgErr.textContent = '';
   // Commit: hot-reload without restarting the clock.
   config = cloneConfig(editing);
-  // carry over live SoC for banks that still exist (by id), else use new soc
+  // carry over live SoC for banks that still exist (by id), else 50
   const newBanks = config.banks.map(b => {
     const old = banks.find(bb => bb.id === b.id);
-    return { ...b, soc: old ? old.soc : b.soc };
+    return { ...b, soc: old ? old.soc : 50 };
   });
   banks = newBanks;
   saveJSON(LS.config, config);
-  saveJSON(LS.soc, banks.map(b => round(b.soc, 2)));
   // re-init render with new config (rebuilds static boxes/SoC tracks); init()
   // clears previous content internally. Clock keeps running.
   init(svg, config);

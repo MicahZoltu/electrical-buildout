@@ -388,25 +388,27 @@ export function computeIrradiance(hourOfDay, overcast = false) {
 
 // Per-MPPT output power in kW, scaling ~linearly with irradiance below STC
 // (no temperature derate). Disabled MPPTs produce 0.
-//   perPanelW = wattSTC * (irradiance / irradiancePeak)
-//   mpptPowerW = perPanelW * panels * mpptEfficiency
+//   panels = series × parallel  (derived, never stored)
+//   perPanelW = vmp × imp  (per-panel STC power)
+//   mpptPowerW = perPanelW × panels × (irradiance / irradiancePeak) × mpptEfficiency
 export function mpptPowerKW(mpptConfig, irradiance) {
   if (!mpptConfig || mpptConfig.enabled === false) return 0;
   const irr = Math.max(0, Number(irradiance) || 0);   // solar output never negative
-  const perPanelW = mpptConfig.wattSTC * (irr / CONST.irradiancePeak);
-  const mpptPowerW = perPanelW * mpptConfig.panels * CONST.mpptEfficiency;
+  const panels = mpptConfig.series * mpptConfig.parallel;
+  const perPanelW = mpptConfig.vmp * mpptConfig.imp;
+  const mpptPowerW = perPanelW * panels * (irr / CONST.irradiancePeak) * CONST.mpptEfficiency;
   return round(mpptPowerW / 1000, 2);
 }
 
 /* ============================ PER-MPPT VOLTAGE (display) ============================ */
 
 // Panel-string Vmp, weakly dependent on irradiance (drops slightly at low sun).
-//   vmp = vmpSTC * series * (0.85 + 0.15 * (irradiance / irradiancePeak))
-// At full sun: ≈ vmpSTC × series (nominal). At 200 W/m²: ≈ × 0.88.
+//   vmp = vmp(per-panel) × series × (0.85 + 0.15 × (irradiance / irradiancePeak))
+// At full sun: ≈ vmp × series (nominal). At 200 W/m²: ≈ × 0.88.
 export function mpptVmp(mpptConfig, irradiance) {
   const irr = Math.max(0, Number(irradiance) || 0);   // non-physical below 0
   const f = 0.85 + 0.15 * (irr / CONST.irradiancePeak);
-  return round(mpptConfig.vmpSTC * mpptConfig.series * f, 1);
+  return round(mpptConfig.vmp * mpptConfig.series * f, 1);
 }
 
 /* ============================ TOTAL SOLAR ============================ */

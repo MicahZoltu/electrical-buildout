@@ -9,57 +9,74 @@ import { DEFAULT_CONFIG } from './config.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 
-/* ---------- LAYOUT GRID ---------- */
+/* ---------- LAYOUT GRID ----------
+   Uniform geometry: every box (except the DC bus rail) is BW×BH. Left-side
+   rows (4 solar + 4 banks + 1 grid = 9) share a single vertical step VSTEP,
+   so all inter-row gaps are equal. DC-AC boxes are evenly distributed on the
+   right. Horizontal gaps solar↔mppt and dcac↔load are matched (HGAP).
+*/
+const BW = 160, BH = 62;          // uniform box size (except DC bus)
+const VSTEP = 80;                 // vertical step between left-side rows (gap = VSTEP-BH = 18)
+const HGAP = 60;                  // matched horizontal gap for solar→mppt & dcac→load
+
 const LAY = {
-  W: 1320, H: 880,
-  src: 120, dcdc: 330, bus: 480, dcac: 660, load: 881,
-  busTop: 70, busBot: 770,
+  W: 969, H: 703,
+  src: 80, dcdc: 300, bus: 484, busW: 88,
+  dcac: 668, load: 888,
+  busTop: 1, busBot: 701,
 };
 
+// Left-side rows: 9 evenly spaced (4 solar, 4 banks, 1 grid), step VSTEP.
+// Centered as a group with the DC bus rail and the right-side DC-AC boxes.
+// Span = 8*VSTEP + BH = 702; center on (busTop+busBot)/2 = 420 → first row y=100.
+const ROW_Y = [31, 111, 191, 271, 351, 431, 511, 591, 671];
+
 const SOLAR = [
-  { id:'sol1', name:'Sub-array 1', x:LAY.src, y:90 },
-  { id:'sol2', name:'Sub-array 2', x:LAY.src, y:165 },
-  { id:'sol3', name:'Sub-array 3', x:LAY.src, y:240 },
-  { id:'sol4', name:'Sub-array 4', x:LAY.src, y:315 },
+  { id:'sol1', name:'Sub-array 1', x:LAY.src, y:ROW_Y[0] },
+  { id:'sol2', name:'Sub-array 2', x:LAY.src, y:ROW_Y[1] },
+  { id:'sol3', name:'Sub-array 3', x:LAY.src, y:ROW_Y[2] },
+  { id:'sol4', name:'Sub-array 4', x:LAY.src, y:ROW_Y[3] },
 ];
 const MPPT = [
-  { id:'mppt1', sub:'sol1', name:'MPPT 1', x:LAY.dcdc, y:90,  idx:0 },
-  { id:'mppt2', sub:'sol2', name:'MPPT 2', x:LAY.dcdc, y:165, idx:1 },
-  { id:'mppt3', sub:'sol3', name:'MPPT 3', x:LAY.dcdc, y:240, idx:2 },
-  { id:'mppt4', sub:'sol4', name:'MPPT 4', x:LAY.dcdc, y:315, idx:3 },
+  { id:'mppt1', sub:'sol1', name:'MPPT 1', x:LAY.dcdc, y:ROW_Y[0], idx:0 },
+  { id:'mppt2', sub:'sol2', name:'MPPT 2', x:LAY.dcdc, y:ROW_Y[1], idx:1 },
+  { id:'mppt3', sub:'sol3', name:'MPPT 3', x:LAY.dcdc, y:ROW_Y[2], idx:2 },
+  { id:'mppt4', sub:'sol4', name:'MPPT 4', x:LAY.dcdc, y:ROW_Y[3], idx:3 },
 ];
 
 const BANKS = [
-  { id:'A', x:LAY.src, y:430 },
-  { id:'B', x:LAY.src, y:510 },
-  { id:'C', x:LAY.src, y:590 },
-  { id:'D', x:LAY.src, y:670 },
+  { id:'A', x:LAY.src, y:ROW_Y[4] },
+  { id:'B', x:LAY.src, y:ROW_Y[5] },
+  { id:'C', x:LAY.src, y:ROW_Y[6] },
+  { id:'D', x:LAY.src, y:ROW_Y[7] },
 ];
 const DCDC = [
-  { id:'dcdcA', bank:'A', x:LAY.dcdc, y:430 },
-  { id:'dcdcB', bank:'B', x:LAY.dcdc, y:510 },
-  { id:'dcdcC', bank:'C', x:LAY.dcdc, y:590 },
-  { id:'dcdcD', bank:'D', x:LAY.dcdc, y:670 },
+  { id:'dcdcA', bank:'A', x:LAY.dcdc, y:ROW_Y[4] },
+  { id:'dcdcB', bank:'B', x:LAY.dcdc, y:ROW_Y[5] },
+  { id:'dcdcC', bank:'C', x:LAY.dcdc, y:ROW_Y[6] },
+  { id:'dcdcD', bank:'D', x:LAY.dcdc, y:ROW_Y[7] },
 ];
 
-const GRID = { id:'grid', x:LAY.src, y:740 };
-const ACDC = { id:'acdc', x:LAY.dcdc, y:740 };
+const GRID = { id:'grid', x:LAY.src, y:ROW_Y[8] };
+const ACDC = { id:'acdc', x:LAY.dcdc, y:ROW_Y[8] };
 
-const BUS = { x:LAY.bus, w:88 };
+const BUS = { x:LAY.bus, w:LAY.busW };
 
-// DC-AC converters: name kept for tooltip mapping; box shows 2 info lines only.
+// DC-AC converters: evenly spaced across the bus span on the right,
+// center-aligned as a group with the bus rail and the left-side rows.
 const DCAC = [
-  { id:'dcacDelta', x:LAY.dcac, y:280, line1:'230V · 3φ Δ', v:230, kind:'3d' },
-  { id:'dcacWye',   x:LAY.dcac, y:380, line1:'400V · 3φ Y', v:400, kind:'3y' },
-  { id:'dcacOne',   x:LAY.dcac, y:560, line1:'230V · 1φ',   v:230, kind:'1'  },
+  { id:'dcacDelta', x:LAY.dcac, y:171, line1:'230V · 3φ Δ', v:230, kind:'3d' },
+  { id:'dcacWye',   x:LAY.dcac, y:351, line1:'400V · 3φ Y', v:400, kind:'3y' },
+  { id:'dcacOne',   x:LAY.dcac, y:531, line1:'230V · 1φ',   v:230, kind:'1'  },
 ];
 const LOADS = [
-  { id:'loadDelta', name:'3φ Delta Loads', x:LAY.load, y:280, color:'var(--ac3)', kind:'3d' },
-  { id:'loadWye',   name:'3φ Wye Loads',   x:LAY.load, y:380, color:'var(--ac3)', kind:'3y' },
-  { id:'loadOne',   name:'1φ Loads',       x:LAY.load, y:560, color:'var(--ac1)', kind:'1'  },
+  { id:'loadDelta', name:'3φ Delta Loads', x:LAY.load, y:171, color:'var(--ac3)', kind:'3d' },
+  { id:'loadWye',   name:'3φ Wye Loads',   x:LAY.load, y:351, color:'var(--ac3)', kind:'3y' },
+  { id:'loadOne',   name:'1φ Loads',       x:LAY.load, y:531, color:'var(--ac1)', kind:'1'  },
 ];
 
-const BS = { srcW:160, srcH:62, dcdcW:118, dcdcH:54, invW:140, invH:50, loadW:160, loadH:54 };
+// Alias for readability inside box() calls — all boxes now use BW×BH.
+const BS = { srcW:BW, srcH:BH, dcdcW:BW, dcdcH:BH, invW:BW, invH:BH, loadW:BW, loadH:BH };
 
 /* ---------- SVG HELPERS ---------- */
 function el(tag, attrs={}, children=[]) {
@@ -159,12 +176,12 @@ function undim(id){ const n=document.getElementById('node-'+id); if(n){n.classLi
 
 /* ---------- STATIC RENDER ---------- */
 function drawStatic() {
-  // DC Bus
-  gNodes.appendChild(rect(BUS.x-BUS.w/2, LAY.busTop, BUS.w, LAY.busBot-LAY.busTop, 'var(--panel2)', 'var(--dc)', 12));
-  gNodes.appendChild(text(BUS.x, LAY.busTop+20, 'DC BUS', 'box-title', {'text-anchor':'middle','id':'node-dcbus'}));
-  gNodes.appendChild(text(BUS.x, LAY.busTop+36, '~400V DC', 'box-label', {'text-anchor':'middle'}));
-  gNodes.appendChild(text(BUS.x, LAY.busBot-22, 'no phases', 'box-label', {'text-anchor':'middle','fill':'var(--dc)'}));
-  gNodes.appendChild(text(BUS.x, LAY.busBot-8, 'single rail', 'box-label', {'text-anchor':'middle','fill':'var(--dc)'}));
+  // DC Bus — wrapped in a group so the whole rect is hoverable/clickable
+  const busG = el('g', { id:'node-dcbus' });
+  busG.appendChild(rect(BUS.x-BUS.w/2, LAY.busTop, BUS.w, LAY.busBot-LAY.busTop, 'var(--panel2)', 'var(--dc)', 12));
+  busG.appendChild(text(BUS.x, LAY.busTop+20, 'DC BUS', 'box-title', {'text-anchor':'middle'}));
+  busG.appendChild(text(BUS.x, LAY.busTop+36, '~400V DC', 'box-label', {'text-anchor':'middle'}));
+  gNodes.appendChild(busG);
 
   // Solar sub-arrays — title + dynamic kW line + solar-yield bar
   SOLAR.forEach((s, i) => {
@@ -179,7 +196,7 @@ function drawStatic() {
   // MPPTs
   MPPT.forEach((m, i) => {
     const cfg = activeConfig.mppts[i];
-    const sub = cfg ? `${cfg.panels}p · ${cfg.series}s${cfg.parallel}p` : 'tracks MPP';
+    const sub = cfg ? `${cfg.series * cfg.parallel}p · ${cfg.series}s${cfg.parallel}p` : 'tracks MPP';
     gNodes.appendChild(box({ id:m.id, x:m.x, y:m.y, w:BS.dcdcW, h:BS.dcdcH, name:m.name, sub, color:'var(--solar)', accent:'isolated' }));
   });
 
@@ -196,7 +213,7 @@ function drawStatic() {
     gNodes.appendChild(el('rect',{ id:'socFill-'+b.id, x:bx, y:by, width:0, height:6, rx:3, ry:3, fill:'var(--battery)' }));
   });
   // DC-DC converters
-  DCDC.forEach(d => gNodes.appendChild(box({ id:d.id, x:d.x, y:d.y, w:BS.dcdcW, h:BS.dcdcH, name:'DC-DC '+d.id.slice(-1), sub:'bi-dir', color:'var(--battery)', accent:'profile-locked' })));
+  DCDC.forEach(d => gNodes.appendChild(box({ id:d.id, x:d.x, y:d.y, w:BS.dcdcW, h:BS.dcdcH, name:'DC-DC Converter '+d.id.slice(-1), sub:'bidirectional', color:'var(--battery)', accent:'profile-locked' })));
 
   // Grid + AC-DC charger
   {
@@ -204,7 +221,7 @@ function drawStatic() {
     g.appendChild(el('text', { id:'grid-kw', x:GRID.x, y:GRID.y-BS.srcH/2+50, 'text-anchor':'middle', class:'box-label', 'font-size':11, 'font-weight':700, fill:'var(--grid)' }, ['']));
     gNodes.appendChild(g);
   }
-  gNodes.appendChild(box({ id:'acdc', x:ACDC.x, y:ACDC.y, w:BS.dcdcW, h:BS.dcdcH, name:'AC-DC', sub:'rectifier', color:'var(--grid)' }));
+  gNodes.appendChild(box({ id:'acdc', x:ACDC.x, y:ACDC.y, w:BS.dcdcW, h:BS.dcdcH, name:'AC-DC Charger', sub:'rectifier', color:'var(--grid)' }));
 
   // DC-AC converters — 2 lines only: line1 = voltage+phase+wye/delta, line2 = amps (dynamic)
   DCAC.forEach(d => {
@@ -212,8 +229,9 @@ function drawStatic() {
     const bx=d.x-BS.invW/2, by=d.y-BS.invH/2;
     g.appendChild(rect(bx,by,BS.invW,BS.invH,'var(--panel)', d.kind==='1'?'var(--ac1)':'var(--ac3)'));
     g.appendChild(rect(bx+8,by,BS.invW-16,3, d.kind==='1'?'var(--ac1)':'var(--ac3)', d.kind==='1'?'var(--ac1)':'var(--ac3)', 2));
-    g.appendChild(text(d.x,by+20, d.line1, 'box-title', {'text-anchor':'middle'}));
-    g.appendChild(el('text',{ id:'dcac-amps-'+d.id, x:d.x, y:by+36, 'text-anchor':'middle', class:'box-label', 'font-size':11, 'font-weight':600, fill: d.kind==='1'?'var(--ac1)':'var(--ac3)' }, ['0A']));
+    g.appendChild(text(d.x,by+20, 'DC-AC Converter', 'box-title', {'text-anchor':'middle'}));
+    g.appendChild(text(d.x,by+34, d.line1, 'box-label', {'text-anchor':'middle'}));
+    g.appendChild(el('text',{ id:'dcac-amps-'+d.id, x:d.x, y:by+50, 'text-anchor':'middle', class:'box-label', 'font-size':11, 'font-weight':600, fill: d.kind==='1'?'var(--ac1)':'var(--ac3)' }, ['0A']));
     gNodes.appendChild(g);
   });
 
@@ -349,7 +367,7 @@ export function render(state) {
   const gridKwEl = document.getElementById('grid-kw');
   if (state.gridKW > 0) {
     undim('grid'); undim('acdc');
-    setFlow(lG1, 'var(--grid)');
+    setFlow(lG1, 'var(--grid)', 3.5, false, false);
     setFlow(lG2, 'var(--grid)');
     if (gridKwEl) { gridKwEl.textContent = state.gridKW.toFixed(1)+' kW'; gridKwEl.setAttribute('fill','var(--grid)'); show(gridKwEl); }
     setLabel(lbGAc, '230V AC', 'var(--muted)');
@@ -394,7 +412,7 @@ export function render(state) {
   // ---- Regime label ----
   const regColors = { idle:'var(--muted)', surplus:'var(--solar)', discharge:'var(--battery)', grid:'var(--grid)' };
   let regLabel = document.getElementById('regimeLabel');
-  if (!regLabel) { regLabel = el('text',{id:'regimeLabel', x:BUS.x, y:LAY.busBot-38, 'text-anchor':'middle', 'font-size':11, 'font-weight':700}); gNodes.appendChild(regLabel); }
+  if (!regLabel) { regLabel = el('text',{id:'regimeLabel', x:BUS.x, y:690, 'text-anchor':'middle', 'font-size':11, 'font-weight':700}); gNodes.appendChild(regLabel); }
   regLabel.setAttribute('fill', regColors[state.regime] || 'var(--muted)');
   regLabel.textContent = state.regime.toUpperCase();
 }
@@ -421,6 +439,7 @@ export function attachTooltips(tipEl) {
     'node-dcbus':PARTS.dcbus,
     'node-loadDelta':PARTS.acpanel,'node-loadWye':PARTS.acpanel,'node-loadOne':PARTS.acpanel,
   };
+  const tipText = info => info.title + '\n' + info.desc;
   Object.entries(map).forEach(([id, info]) => {
     const n = document.getElementById(id); if (!n) return;
     n.style.cursor = 'help';
@@ -433,5 +452,16 @@ export function attachTooltips(tipEl) {
       tipEl.innerHTML = '<b>'+info.title+'</b><br>'+info.desc;
     });
     n.addEventListener('mouseleave', () => tipEl.style.display = 'none');
+    n.addEventListener('click', async () => {
+      const txt = tipText(info);
+      try {
+        await navigator.clipboard.writeText(txt);
+        tipEl.innerHTML = '<b>✓ Copied</b><br>'+info.title;
+        setTimeout(() => { tipEl.style.display = 'none'; }, 1200);
+      } catch {
+        tipEl.innerHTML = '<b>Copy blocked</b><br>'+info.title;
+        setTimeout(() => { tipEl.style.display = 'none'; }, 1500);
+      }
+    });
   });
 }

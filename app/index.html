@@ -29,7 +29,7 @@
   .btn.toggle.on{background:#1f3a5f;border-color:#58a6ff;color:#79c0ff}
   .main{flex:1;display:grid;grid-template-columns:1fr 300px;min-height:0}
   .stage{position:relative;overflow:auto;background:radial-gradient(circle at 50% 30%,#11161f,#0a0d12);padding:16px}
-  svg{display:block;width:100%;height:100%;min-width:1180px}
+  svg{display:block;width:100%;height:100%;min-width:829px}
   .side{background:var(--panel);border-left:1px solid var(--border);padding:14px;overflow:auto}
   .side h2{font-size:12px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
   .summary{font-size:12px;line-height:1.7}
@@ -100,7 +100,7 @@
 
   <div class="main">
     <div class="stage" id="stage">
-      <svg id="diagram" viewBox="0 0 1320 880" xmlns="http://www.w3.org/2000/svg">
+      <svg id="diagram" viewBox="0 0 969 703" xmlns="http://www.w3.org/2000/svg">
         <g id="g-flows"></g>
         <g id="g-nodes"></g>
         <g id="g-labels"></g>
@@ -132,8 +132,8 @@
     <table class="cfg-table" id="mpptTable">
       <thead>
         <tr>
-          <th>Enable</th><th>ID</th><th>Panels</th><th>Series</th><th>Parallel</th>
-          <th>Watt STC</th><th>Vmp STC</th><th>Voc STC</th>
+          <th>Enable</th><th>ID</th><th>Series</th><th>Parallel</th>
+          <th>Vₘₚ</th><th>Iₘₚ</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -143,7 +143,7 @@
       <thead>
         <tr>
           <th>Enable</th><th>ID</th><th>Nominal V</th><th>kWh</th>
-          <th>Max Charge A</th><th>Max Discharge A</th><th>SoC %</th>
+          <th>Max Charge A</th><th>Max Discharge A</th>
         </tr>
       </thead>
       <tbody></tbody>
